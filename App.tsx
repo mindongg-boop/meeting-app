@@ -56,15 +56,19 @@ const getInitialBookings = (): Booking[] => {
     ];
 };
 
-const initialDepartments = [
-  '엔지니어링',
-  '마케팅',
-  '영업',
-  '인사',
-  '디자인',
-  '재무',
-  '운영',
-  '고객 지원',
+const newInitialDepartments = [
+  '기획혁신팀',
+  '운영관리팀',
+  '훈련취업지원팀',
+  '글로벌훈련지원팀',
+  '프로젝트TF',
+  '디지털아카데미TF',
+  '서울SW아카데미TF',
+  'AI사업TF',
+  '고용사업지원TF',
+  '직업계고교육지원TF',
+  '인재교육지원팀',
+  '기타',
 ];
 
 // Helper to format a local date into YYYY-MM-DD string to avoid timezone issues with input[type=date]
@@ -78,7 +82,23 @@ const localDateToYMD = (date: Date): string => {
 const ADMIN_PASSWORD = 'admin123'; // Hardcoded admin password for simplicity
 
 const App: React.FC = () => {
-  const [bookings, setBookings] = useState<Booking[]>(getInitialBookings());
+  const [bookings, setBookings] = useState<Booking[]>(() => {
+    try {
+      const savedBookings = localStorage.getItem('bookings');
+      if (savedBookings) {
+        const parsed = JSON.parse(savedBookings) as (Omit<Booking, 'startTime' | 'endTime'> & { startTime: string; endTime: string; })[];
+        return parsed.map(b => ({
+          ...b,
+          startTime: new Date(b.startTime),
+          endTime: new Date(b.endTime),
+        }));
+      }
+    } catch (error) {
+      console.error("Failed to load bookings from localStorage", error);
+    }
+    return getInitialBookings();
+  });
+
   const [selectedDate, setSelectedDate] = useState(new Date());
   
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -89,9 +109,35 @@ const App: React.FC = () => {
 
   const [isAdmin, setIsAdmin] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  const [departments, setDepartments] = useState<string[]>(initialDepartments);
+  
+  const [departments, setDepartments] = useState<string[]>(() => {
+    try {
+      const savedDepartments = localStorage.getItem('departments');
+      return savedDepartments ? JSON.parse(savedDepartments) : newInitialDepartments;
+    } catch (error) {
+      console.error("Failed to load departments from localStorage", error);
+      return newInitialDepartments;
+    }
+  });
   
   useNotificationScheduler(bookings);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('bookings', JSON.stringify(bookings));
+    } catch (error) {
+      console.error("Failed to save bookings to localStorage", error);
+    }
+  }, [bookings]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('departments', JSON.stringify(departments));
+    } catch (error) {
+      console.error("Failed to save departments to localStorage", error);
+    }
+  }, [departments]);
+
 
   useEffect(() => {
     const interval = setInterval(() => {
