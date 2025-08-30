@@ -1,0 +1,21 @@
+{
+  "name": "단장님 미팅예약",
+  "short_name": "미팅예약",
+  "description": "A dynamic meeting room booking application inspired by hospital reservation systems.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f1f5f9",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "https://img.icons8.com/fluency/192/000000/calendar-alarm.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://img.icons8.com/fluency/512/000000/calendar-alarm.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

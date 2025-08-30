@@ -1,0 +1,5 @@
+{
+  "name": "Copy of 단장님 미팅예약",
+  "description": "A dynamic meeting room booking application inspired by hospital reservation systems. It features real-time status tracking (scheduled, in-progress, delayed), automatic cascading delays if a meeting is extended, and admin controls to block out time for events like business trips. Users can mark meetings with external guests and receive timely notifications.",
+  "requestFramePermissions": []
+}
