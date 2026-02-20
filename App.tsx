@@ -1,383 +1,270 @@
-import React, { useState, useEffect, useCallback } from 'react';
-// FIX: Import BookingStatus to use as an explicit type.
-import type { Booking, BookingStatus } from './types';
-import { useNotificationScheduler } from './hooks/useNotificationScheduler';
-import Header from './components/Header';
-import TimeSlotGrid from './components/TimeSlotGrid';
-import BookingModal from './components/BookingModal';
-import MyBookings from './components/MyBookings';
-import DepartmentManager from './components/DepartmentManager';
-import PasswordModal from './components/PasswordModal';
+import React, { useMemo, useState } from 'react';
 
-const getInitialBookings = (): Booking[] => {
-    const today = new Date();
-    const tomorrow = new Date();
-    tomorrow.setDate(today.getDate() + 1);
+type FlowNode = {
+  id: string;
+  label: string;
+  order: number;
+};
 
-    const booking1Time = new Date(today);
-    if (today.getHours() < 10) {
-      booking1Time.setHours(10, 30, 0, 0);
-    } else {
-      booking1Time.setDate(booking1Time.getDate() + 1);
-      booking1Time.setHours(10, 30, 0, 0);
+type NodePlacement = {
+  x: number;
+  y: number;
+  row: number;
+  column: number;
+};
+
+type FlowEdge = {
+  from: string;
+  to: string;
+};
+
+type FlowData = {
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+};
+
+const DEFAULT_PROMPT = `아이디어 수집\n요구사항 정리\n초안 작성\n팀 리뷰\n수정 및 보완\n최종 배포`;
+
+const sanitizeLabel = (text: string): string => text.trim().replace(/\s+/g, ' ');
+
+const parseWorkflow = (text: string): FlowData => {
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    return { nodes: [], edges: [] };
+  }
+
+  const supportsArrows = lines.some((line) => line.includes('->'));
+  const edges: FlowEdge[] = [];
+  const nodeOrder: string[] = [];
+  const nodeSet = new Set<string>();
+
+  const addNode = (label: string) => {
+    if (!nodeSet.has(label)) {
+      nodeSet.add(label);
+      nodeOrder.push(label);
     }
-    
-    const booking2Time = new Date(today);
-    booking2Time.setHours(booking1Time.getHours() + 1, 0, 0, 0);
+  };
 
-    return [
-        {
-            id: '1',
-            title: '주간 팀 싱크업',
-            startTime: booking1Time,
-            endTime: new Date(booking1Time.getTime() + 30 * 60000),
-            userName: 'Alice',
-            userContact: '123-456-7890',
-            department: '엔지니어링',
-            status: 'scheduled',
-            isExternal: false,
-            delayInMinutes: 0,
-        },
-        {
-            id: '2',
-            title: '신규 프로젝트 디자인 리뷰',
-            startTime: booking2Time,
-            endTime: new Date(booking2Time.getTime() + 60 * 60000),
-            userName: 'Bob',
-            userContact: '098-765-4321',
-            department: '디자인',
-            memo: 'Conference Room 5',
-            status: 'scheduled',
-            isExternal: true,
-            isUrgent: true,
-            requests: '프로젝터를 준비해주세요.',
-            delayInMinutes: 0,
-        },
-    ];
+  if (supportsArrows) {
+    lines.forEach((line) => {
+      const parts = line.split('->').map(sanitizeLabel).filter(Boolean);
+      if (parts.length === 0) {
+        return;
+      }
+      parts.forEach(addNode);
+      for (let i = 0; i < parts.length - 1; i += 1) {
+        edges.push({ from: parts[i], to: parts[i + 1] });
+      }
+    });
+  } else {
+    lines.forEach((line) => addNode(sanitizeLabel(line)));
+    for (let i = 0; i < nodeOrder.length - 1; i += 1) {
+      edges.push({ from: nodeOrder[i], to: nodeOrder[i + 1] });
+    }
+  }
+
+  const incomingCount = new Map<string, number>();
+  nodeOrder.forEach((node) => incomingCount.set(node, 0));
+  edges.forEach((edge) => {
+    incomingCount.set(edge.to, (incomingCount.get(edge.to) ?? 0) + 1);
+  });
+
+  const levelMap = new Map<string, number>();
+  const queue = nodeOrder.filter((node) => (incomingCount.get(node) ?? 0) === 0);
+  queue.forEach((node) => levelMap.set(node, 0));
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) {
+      break;
+    }
+    const currentLevel = levelMap.get(current) ?? 0;
+
+    edges
+      .filter((edge) => edge.from === current)
+      .forEach((edge) => {
+        const nextLevel = Math.max((levelMap.get(edge.to) ?? 0), currentLevel + 1);
+        levelMap.set(edge.to, nextLevel);
+        incomingCount.set(edge.to, (incomingCount.get(edge.to) ?? 1) - 1);
+        if ((incomingCount.get(edge.to) ?? 0) === 0) {
+          queue.push(edge.to);
+        }
+      });
+  }
+
+  nodeOrder.forEach((node, index) => {
+    if (!levelMap.has(node)) {
+      levelMap.set(node, index);
+    }
+  });
+
+  const nodes = nodeOrder.map((label, index) => ({
+    id: label,
+    label,
+    order: index,
+  }));
+
+  return { nodes, edges };
 };
-
-const newInitialDepartments = [
-  '기획혁신팀',
-  '운영관리팀',
-  '훈련취업지원팀',
-  '글로벌훈련지원팀',
-  '프로젝트TF',
-  '디지털아카데미TF',
-  '서울SW아카데미TF',
-  'AI사업TF',
-  '고용사업지원TF',
-  '직업계고교육지원TF',
-  '인재교육지원팀',
-  '기타',
-];
-
-// Helper to format a local date into YYYY-MM-DD string to avoid timezone issues with input[type=date]
-const localDateToYMD = (date: Date): string => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-};
-
-const ADMIN_PASSWORD = 'admin123'; // Hardcoded admin password for simplicity
 
 const App: React.FC = () => {
-  const [bookings, setBookings] = useState<Booking[]>(() => {
-    try {
-      const savedBookings = localStorage.getItem('bookings');
-      if (savedBookings) {
-        const parsed = JSON.parse(savedBookings) as (Omit<Booking, 'startTime' | 'endTime'> & { startTime: string; endTime: string; })[];
-        return parsed.map(b => ({
-          ...b,
-          startTime: new Date(b.startTime),
-          endTime: new Date(b.endTime),
-        }));
-      }
-    } catch (error) {
-      console.error("Failed to load bookings from localStorage", error);
-    }
-    return getInitialBookings();
-  });
+  const [inputText, setInputText] = useState(DEFAULT_PROMPT);
+  const flowData = useMemo(() => parseWorkflow(inputText), [inputText]);
 
-  const [selectedDate, setSelectedDate] = useState(new Date());
-  
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState<'create' | 'edit'>('create');
-  
-  const [selectedSlot, setSelectedSlot] = useState<Date | null>(null);
-  const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
+  const nodeWidth = 220;
+  const nodeHeight = 56;
+  const horizontalGap = 48;
+  const verticalGap = 70;
+  const maxNodesPerRow = 6;
 
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  
-  const [departments, setDepartments] = useState<string[]>(() => {
-    try {
-      const savedDepartments = localStorage.getItem('departments');
-      return savedDepartments ? JSON.parse(savedDepartments) : newInitialDepartments;
-    } catch (error) {
-      console.error("Failed to load departments from localStorage", error);
-      return newInitialDepartments;
-    }
-  });
-  
-  useNotificationScheduler(bookings);
+  const rowCount = Math.max(1, Math.ceil(flowData.nodes.length / maxNodesPerRow));
+  const columnCount = Math.min(maxNodesPerRow, Math.max(1, flowData.nodes.length));
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('bookings', JSON.stringify(bookings));
-    } catch (error) {
-      console.error("Failed to save bookings to localStorage", error);
-    }
-  }, [bookings]);
+  const width = 120 + columnCount * nodeWidth + (columnCount - 1) * horizontalGap;
+  const height = 120 + rowCount * nodeHeight + (rowCount - 1) * verticalGap;
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('departments', JSON.stringify(departments));
-    } catch (error) {
-      console.error("Failed to save departments to localStorage", error);
-    }
-  }, [departments]);
-
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const now = new Date();
-      setBookings(prevBookings =>
-        prevBookings.map(booking => {
-          if (booking.isBlockOut || booking.status === 'completed' || booking.status === 'cancelled') {
-            return booking;
-          }
-          
-          let newStatus: BookingStatus = booking.status;
-          if (now >= booking.startTime && now < booking.endTime) {
-            newStatus = 'in-progress';
-          } else if (now >= booking.endTime) {
-            newStatus = 'completed';
-          } else if (now < booking.startTime && booking.status === 'in-progress'){
-            newStatus = 'scheduled';
-          }
-
-          if (newStatus !== booking.status) {
-            return { ...booking, status: newStatus };
-          }
-          return booking;
-        })
-      );
-    }, 5000); // Update status every 5 seconds
-
-    return () => clearInterval(interval);
-  }, []);
-
-
-  const handleSelectSlot = (startTime: Date) => {
-    setModalMode('create');
-    setSelectedSlot(startTime);
-    setEditingBooking(null);
-    setIsModalOpen(true);
-  };
-
-  const handleEditBookingClick = (booking: Booking) => {
-    setModalMode('edit');
-    setEditingBooking(booking);
-    setSelectedSlot(null);
-    setIsModalOpen(true);
-  }
-
-  const handleCloseModal = () => {
-    setIsModalOpen(false);
-    setSelectedSlot(null);
-    setEditingBooking(null);
-  };
-
-  const handleBookingSubmit = (details: Partial<Booking>) => {
-    const startTime = modalMode === 'create' ? selectedSlot : editingBooking?.startTime;
-    const endTime = details.endTime;
-    
-    if (!startTime || !endTime) return;
-
-    // Check for overlaps
-    const isOverlap = bookings.some(b => {
-      if (modalMode === 'edit' && b.id === editingBooking?.id) {
-        return false;
-      }
-      return startTime.getTime() < b.endTime.getTime() && endTime.getTime() > b.startTime.getTime();
-    });
-
-    if (isOverlap) {
-      alert('선택하신 시간대에 이미 다른 예약이 있습니다. 시간이나 예약 길이를 조정해주세요.');
-      return;
-    }
-
-    if (modalMode === 'create') {
-        const newBooking: Booking = {
-          id: crypto.randomUUID(),
-          status: 'scheduled',
-          userName: '', 
-          userContact: '',
-          department: '',
-          delayInMinutes: 0,
-          ...details,
-          startTime,
-          endTime,
-        } as Booking;
-        setBookings(prev => [...prev, newBooking].sort((a,b) => a.startTime.getTime() - b.startTime.getTime()));
-    } else if (modalMode === 'edit' && editingBooking) {
-        setBookings(prev => prev.map(b => b.id === editingBooking.id ? {...b, ...details} : b));
-    }
-    handleCloseModal();
-  };
-  
-  const handleCancelBooking = (bookingId: string) => {
-      setBookings(prevBookings => prevBookings.filter(b => b.id !== bookingId));
-  }
-  
-  const handleDelayMeeting = useCallback((bookingId: string, minutes: number) => {
-    setBookings(currentBookings => {
-      return currentBookings.map(b => {
-        if (b.id === bookingId) {
-          const currentDelay = b.delayInMinutes || 0;
-          const newDelay = currentDelay + minutes;
-          return {
-            ...b,
-            delayInMinutes: newDelay,
-            memo: (b.memo ? b.memo + '\n' : '') + `관리자가 ${minutes}분 지연을 추가했습니다. (총 ${newDelay}분 지연)`
-          };
-        }
-        return b;
-      });
-    });
-  }, []);
-
-  const handleResetDelay = useCallback((bookingId: string) => {
-    setBookings(currentBookings => {
-      return currentBookings.map(b => {
-        if (b.id === bookingId) {
-          const oldDelay = b.delayInMinutes || 0;
-          if (oldDelay === 0) return b;
-          return {
-            ...b,
-            delayInMinutes: 0,
-            memo: (b.memo ? b.memo + '\n' : '') + `관리자가 지연(${oldDelay}분)을 초기화했습니다.`
-          };
-        }
-        return b;
-      });
-    });
-  }, []);
-
-  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const [year, month, day] = e.target.value.split('-').map(Number);
-    const newDate = new Date();
-    newDate.setFullYear(year, month - 1, day);
-    newDate.setHours(0, 0, 0, 0);
-    setSelectedDate(newDate);
-  };
-
-  const handleAdminToggle = () => {
-    if (isAdmin) {
-      setIsAdmin(false);
-    } else {
-      setIsPasswordModalOpen(true);
-    }
-  };
-
-  const handlePasswordSubmit = (password: string) => {
-    if (password === ADMIN_PASSWORD) {
-      setIsAdmin(true);
-    } else {
-      alert('암호가 올바르지 않습니다.');
-    }
-    setIsPasswordModalOpen(false);
-  };
-
-  const handleAddDepartment = (department: string) => {
-    if (department.trim() && !departments.includes(department.trim())) {
-      setDepartments(prev => [...prev, department.trim()]);
-    }
-  };
-
-  const handleDeleteDepartment = (departmentToDelete: string) => {
-    setDepartments(prev => prev.filter(dep => dep !== departmentToDelete));
-  };
+  const positionMap = new Map<string, NodePlacement>(
+    flowData.nodes.map((node) => {
+      const column = node.order % maxNodesPerRow;
+      const row = Math.floor(node.order / maxNodesPerRow);
+      const x = 60 + column * (nodeWidth + horizontalGap);
+      const y = 60 + row * (nodeHeight + verticalGap);
+      return [node.id, { x, y, row, column }];
+    }),
+  );
 
   return (
-    <div className="min-h-screen bg-slate-100 font-sans">
-      <Header />
-      <main className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          
-          <div className="lg:col-span-2 space-y-8">
-            <div className="bg-white p-4 rounded-xl shadow-sm flex items-center justify-between flex-wrap gap-4">
-                <div className="flex items-center">
-                    <label htmlFor="date-picker" className="text-lg font-medium text-slate-700 mr-4">날짜 선택</label>
-                    <input
-                        id="date-picker"
-                        type="date"
-                        value={localDateToYMD(selectedDate)}
-                        onChange={handleDateChange}
-                        className="border-slate-300 rounded-lg shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                        min={localDateToYMD(new Date())}
-                    />
-                </div>
-                <div className="flex items-center space-x-3">
-                    <label htmlFor="admin-toggle" className="text-sm font-medium text-slate-900">Admin Mode</label>
-                    <button
-                        role="switch"
-                        aria-checked={isAdmin}
-                        onClick={handleAdminToggle}
-                        className={`${isAdmin ? 'bg-indigo-600' : 'bg-slate-300'} relative inline-flex items-center h-6 rounded-full w-11 transition-colors duration-300 ease-in-out focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500`}
-                        id="admin-toggle"
-                    >
-                        <span className={`${isAdmin ? 'translate-x-6' : 'translate-x-1'} inline-block w-4 h-4 transform bg-white rounded-full transition-transform duration-300 ease-in-out`} />
-                    </button>
-                </div>
+    <div className="min-h-screen bg-slate-100 text-slate-900">
+      <main className="mx-auto max-w-7xl p-6 lg:p-10">
+        <header className="mb-8">
+          <h1 className="text-3xl font-bold">워크플로우 플로우차트 생성기</h1>
+          <p className="mt-2 text-slate-600">
+            단계 내용을 입력하면 자동으로 플로우차트를 생성합니다. 줄바꿈(순차 흐름) 또는
+            <code className="mx-1 rounded bg-slate-200 px-1 py-0.5">A -&gt; B -&gt; C</code>
+            형식을 사용할 수 있으며, 한 줄에 최대 6개까지 좌→우로 배치됩니다.
+          </p>
+        </header>
+
+        <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <article className="rounded-xl bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-semibold">워크플로우 입력</h2>
+            <textarea
+              value={inputText}
+              onChange={(event) => setInputText(event.target.value)}
+              className="mt-4 h-[420px] w-full resize-none rounded-lg border border-slate-300 p-3 text-sm leading-6 shadow-inner focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              placeholder="예: 기획 -&gt; 개발 -&gt; 테스트"
+            />
+          </article>
+
+          <article className="rounded-xl bg-white p-5 shadow-sm">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">자동 생성 플로우차트</h2>
+              <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
+                노드 {flowData.nodes.length}개
+              </span>
             </div>
-            <TimeSlotGrid
-              selectedDate={selectedDate}
-              bookings={bookings}
-              onSelectSlot={handleSelectSlot}
-            />
-            {isAdmin && (
-              <DepartmentManager
-                departments={departments}
-                onAdd={handleAddDepartment}
-                onDelete={handleDeleteDepartment}
-              />
-            )}
-          </div>
 
-          <div className="lg:col-span-1">
-            <MyBookings 
-              bookings={bookings.filter(b => 
-                b.startTime.getFullYear() === selectedDate.getFullYear() &&
-                b.startTime.getMonth() === selectedDate.getMonth() &&
-                b.startTime.getDate() === selectedDate.getDate()
-              )} 
-              onCancelBooking={handleCancelBooking}
-              onEditBooking={handleEditBookingClick}
-              onDelayBooking={handleDelayMeeting}
-              onResetDelay={handleResetDelay}
-              isAdmin={isAdmin}
-            />
-          </div>
+            <div className="h-[420px] overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4">
+              {flowData.nodes.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-slate-500">
+                  내용을 입력하면 플로우차트가 표시됩니다.
+                </div>
+              ) : (
+                <svg width={width} height={height} className="min-w-full">
+                  <defs>
+                    <marker
+                      id="arrowhead"
+                      markerWidth="10"
+                      markerHeight="7"
+                      refX="9"
+                      refY="3.5"
+                      orient="auto"
+                    >
+                      <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1" />
+                    </marker>
+                  </defs>
 
-        </div>
+                  {flowData.edges.map((edge) => {
+                    const from = positionMap.get(edge.from);
+                    const to = positionMap.get(edge.to);
+
+                    if (!from || !to) {
+                      return null;
+                    }
+
+                    const isWrapToNextRow = to.row > from.row;
+
+                    if (isWrapToNextRow) {
+                      return (
+                        <line
+                          key={`${edge.from}-${edge.to}`}
+                          x1={to.x - 40}
+                          y1={to.y + nodeHeight / 2}
+                          x2={to.x}
+                          y2={to.y + nodeHeight / 2}
+                          stroke="#6366f1"
+                          strokeWidth="2"
+                          markerEnd="url(#arrowhead)"
+                        />
+                      );
+                    }
+
+                    return (
+                      <line
+                        key={`${edge.from}-${edge.to}`}
+                        x1={from.x + nodeWidth}
+                        y1={from.y + nodeHeight / 2}
+                        x2={to.x}
+                        y2={to.y + nodeHeight / 2}
+                        stroke="#6366f1"
+                        strokeWidth="2"
+                        markerEnd="url(#arrowhead)"
+                      />
+                    );
+                  })}
+
+                  {flowData.nodes.map((node) => {
+                    const position = positionMap.get(node.id);
+                    if (!position) {
+                      return null;
+                    }
+
+                    return (
+                      <g key={node.id}>
+                        <rect
+                          x={position.x}
+                          y={position.y}
+                          width={nodeWidth}
+                          height={nodeHeight}
+                          rx="10"
+                          fill="#ffffff"
+                          stroke="#a5b4fc"
+                          strokeWidth="2"
+                        />
+                        <text
+                          x={position.x + nodeWidth / 2}
+                          y={position.y + nodeHeight / 2}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fill="#1e293b"
+                          fontSize="14"
+                          fontWeight="500"
+                        >
+                          {node.label}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+              )}
+            </div>
+          </article>
+        </section>
       </main>
-      <BookingModal
-        isOpen={isModalOpen}
-        mode={modalMode}
-        initialData={editingBooking}
-        onClose={handleCloseModal}
-        onSubmit={handleBookingSubmit}
-        startTime={modalMode === 'create' ? selectedSlot : editingBooking?.startTime}
-        isAdmin={isAdmin}
-        departments={departments}
-      />
-      <PasswordModal
-        isOpen={isPasswordModalOpen}
-        onClose={() => setIsPasswordModalOpen(false)}
-        onSubmit={handlePasswordSubmit}
-      />
     </div>
   );
 };
